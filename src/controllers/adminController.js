@@ -6,7 +6,7 @@ const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Payment = require('../models/Payment');
 const CommissionSetting = require('../models/CommissionSetting');
-const commissionService = require('../services/commissionService');
+const commissionService = require('../services/CommissionService');
 const { successResponse, errorResponse } = require('../utils/responses');
 
 // @desc    Get admin dashboard statistics

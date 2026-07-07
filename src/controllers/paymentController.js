@@ -1,7 +1,7 @@
 // src/controllers/paymentController.js
 
 const paymentService = require('../services/paymentService');
-const commissionService = require('../services/commissionService');
+const commissionService = require('../services/CommissionService');
 const walletService = require('../services/walletService');
 const Order = require('../models/Order');
 const Payment = require('../models/Payment');
