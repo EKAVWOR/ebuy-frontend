@@ -1,6 +1,6 @@
 // src/middleware/subscriptionMiddleware.js
 
-const subscriptionService = require('../services/subscriptionService');
+const subscriptionService = require('../services/SubscriptionService');
 const Product = require('../models/Product');
 const { errorResponse } = require('../utils/responses');
 
