@@ -20,9 +20,9 @@ const withdrawalRoutes = require('./routes/withdrawalRoutes');
 const sugRoutes = require('./routes/sugRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 
-const subscriptionRoutes = require('./routes/subscriptionRoutes');
+const subscriptionRoutes = require('./routes/SubscriptionRoutes');
 
-const studentRegistryRoutes = require('./routes/studentRegistryRoutes');
+const studentRegistryRoutes = require('./routes/StudentRegistryRoutes');
 // Import middleware
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 
