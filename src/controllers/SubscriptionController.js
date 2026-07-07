@@ -1,6 +1,6 @@
 // src/controllers/subscriptionController.js
 
-const subscriptionService = require('../services/subscriptionService');
+const subscriptionService = require('../services/SubscriptionService');
 const Subscription = require('../models/Subscription');
 const { successResponse, errorResponse } = require('../utils/responses');
 
