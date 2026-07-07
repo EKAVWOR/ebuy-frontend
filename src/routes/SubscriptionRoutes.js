@@ -11,7 +11,7 @@ const {
   renewSubscription,
   getAllSubscriptions,
   getSubscriptionStats
-} = require('../controllers/subscriptionController');
+} = require('../controllers/SubscriptionController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 
 // Public routes

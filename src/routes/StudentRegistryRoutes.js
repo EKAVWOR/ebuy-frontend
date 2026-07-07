@@ -13,7 +13,7 @@ const {
   exportRegistry,
   getRegistryStatistics,
   searchStudent
-} = require('../controllers/studentRegistryController');
+} = require('../controllers/StudentRegistryController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { upload } = require('../middleware/uploadMiddleware');
 
