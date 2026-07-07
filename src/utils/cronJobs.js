@@ -1,7 +1,7 @@
 // src/utils/cronJobs.js (NEW FILE)
 
 const cron = require('node-cron');
-const subscriptionService = require('../services/subscriptionService');
+const subscriptionService = require('../services/SubscriptionService');
 const logger = require('./logger');
 
 /**
