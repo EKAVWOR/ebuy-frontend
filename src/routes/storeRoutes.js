@@ -11,7 +11,7 @@ const {
   getStoreProducts
 } = require('../controllers/storeController');
 const { protect, authorize } = require('../middleware/authMiddleware');
-const { requireActiveSubscription } = require('../middleware/subscriptionMiddleware'); // ✅ lowercase
+const { requireActiveSubscription } = require('../middleware/SubscriptionMiddleware'); // ✅ lowercase
 const { validateStore } = require('../middleware/validationMiddleware');
 const { upload } = require('../middleware/uploadMiddleware');
 
