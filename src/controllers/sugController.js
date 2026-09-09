@@ -21,7 +21,6 @@ exports.getDashboardStats = async (req, res) => {
     const totalOrders = await Order.countDocuments({ paymentStatus: 'paid' });
     const registrySize = await StudentRegistry.countDocuments();
 
-    // Store stats
     const totalStores = await Store.countDocuments();
     const pendingStores = await Store.countDocuments({ isApproved: false, status: 'pending' });
     const activeStores = await Store.countDocuments({ isApproved: true, status: 'active' });
@@ -198,9 +197,6 @@ exports.verifyStudent = async (req, res) => {
 
 // ==================== STORE MANAGEMENT ====================
 
-// @desc    Get all stores with filters
-// @route   GET /api/sug/stores
-// @access  Private (SUG)
 exports.getAllStores = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -232,7 +228,6 @@ exports.getAllStores = async (req, res) => {
 
     const total = await Store.countDocuments(query);
 
-    // Counts for stats/tabs
     const pendingCount = await Store.countDocuments({ isApproved: false, status: 'pending' });
     const activeCount = await Store.countDocuments({ isApproved: true, status: 'active' });
     const suspendedCount = await Store.countDocuments({ status: 'suspended' });
@@ -262,9 +257,6 @@ exports.getAllStores = async (req, res) => {
   }
 };
 
-// @desc    Get pending stores
-// @route   GET /api/sug/pending-stores
-// @access  Private (SUG)
 exports.getPendingStores = async (req, res) => {
   try {
     const stores = await Store.find({
@@ -287,9 +279,6 @@ exports.getPendingStores = async (req, res) => {
   }
 };
 
-// @desc    Get single store details
-// @route   GET /api/sug/stores/:storeId
-// @access  Private (SUG)
 exports.getStoreDetails = async (req, res) => {
   try {
     const { storeId } = req.params;
@@ -312,9 +301,6 @@ exports.getStoreDetails = async (req, res) => {
   }
 };
 
-// @desc    Approve or reject store
-// @route   PUT /api/sug/stores/:storeId/approve
-// @access  Private (SUG)
 exports.approveStore = async (req, res) => {
   try {
     const { storeId } = req.params;
@@ -345,9 +331,6 @@ exports.approveStore = async (req, res) => {
   }
 };
 
-// @desc    Update store status (suspend/reactivate)
-// @route   PUT /api/sug/stores/:storeId/status
-// @access  Private (SUG)
 exports.updateStoreStatus = async (req, res) => {
   try {
     const { storeId } = req.params;
@@ -362,7 +345,6 @@ exports.updateStoreStatus = async (req, res) => {
 
     store.status = status;
 
-    // If reactivating a suspended store, ensure it stays approved
     if (status === 'active' && !store.isApproved) {
       store.isApproved = true;
       store.approvedBy = req.user.id;
@@ -466,51 +448,98 @@ exports.addStudentToRegistry = async (req, res) => {
   }
 };
 
+// ✅ FIXED - Bulk upload with flexible CSV parsing (handles various header formats)
 exports.bulkAddStudents = async (req, res) => {
   try {
     if (!req.file) return errorResponse(res, 'Please upload a CSV file', 400);
 
+    console.log('\n🚀 BULK UPLOAD STARTED');
+    console.log('File:', req.file.originalname, 'Size:', req.file.size);
+
     const students = [];
     const errors = [];
     let rowNumber = 0;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return errorResponse(res, 'User authentication failed', 401);
+    }
 
     const currentYear = new Date().getFullYear();
     const defaultSessionYear = `${currentYear}/${currentYear + 1}`;
 
     fs.createReadStream(req.file.path)
-      .pipe(csv())
+      .pipe(csv({
+        // Transform headers: "Matric Number" → "matricnumber", "fullName" → "fullname"
+        mapHeaders: ({ header }) => header.trim().toLowerCase().replace(/\s+/g, '')
+      }))
       .on('data', (row) => {
         rowNumber++;
-        if (!row.matricNumber || !row.fullname || !row.department) {
-          errors.push({ row: rowNumber, error: 'Missing required fields' });
+
+        if (rowNumber === 1) {
+          console.log('📋 First row keys:', Object.keys(row));
+          console.log('📋 First row values:', row);
+        }
+
+        // All keys are now lowercase without spaces
+        const matricNumber = (row.matricnumber || row.matric || '').toString().trim();
+        const fullname = (row.fullname || row.name || '').toString().trim();
+        const department = (row.department || row.dept || '').toString().trim();
+        const faculty = (row.faculty || 'N/A').toString().trim();
+        const level = (row.level || '100').toString().trim();
+        const sessionYear = (row.sessionyear || defaultSessionYear).toString().trim();
+        const email = (row.email || '').toString().trim();
+        const phone = (row.phone || '').toString().trim();
+
+        if (rowNumber === 1) {
+          console.log('📋 Parsed:', { matricNumber, fullname, department, faculty, level });
+        }
+
+        if (!matricNumber || !fullname || !department) {
+          errors.push({
+            row: rowNumber,
+            error: 'Missing required fields',
+            got: { matricNumber, fullname, department }
+          });
           return;
         }
+
         students.push({
-          matricNumber: row.matricNumber.toUpperCase().trim(),
-          fullname: row.fullname.trim(),
-          department: row.department.trim(),
-          faculty: row.faculty?.trim() || 'N/A',
-          level: parseInt(row.level?.trim() || '100'),
-          sessionYear: row.sessionYear?.trim() || defaultSessionYear,
-          email: row.email?.toLowerCase().trim(),
-          phone: row.phone?.trim(),
-          addedBy: req.user.id,
+          matricNumber: matricNumber.toUpperCase(),
+          fullname,
+          department,
+          faculty,
+          level: parseInt(level) || 100,
+          sessionYear,
+          email: email ? email.toLowerCase() : undefined,
+          phone: phone || undefined,
+          addedBy: userId,
           status: 'active'
         });
       })
       .on('end', async () => {
         try {
-          fs.unlinkSync(req.file.path);
+          console.log(`\n✅ Parsed: ${students.length} valid, ${errors.length} errors`);
+
+          if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+
           let inserted = 0, duplicates = 0;
+
           for (const student of students) {
             try {
               await StudentRegistry.create(student);
               inserted++;
             } catch (err) {
-              if (err.code === 11000) duplicates++;
-              else errors.push({ matricNumber: student.matricNumber, error: err.message });
+              if (err.code === 11000) {
+                duplicates++;
+              } else {
+                errors.push({ matricNumber: student.matricNumber, error: err.message });
+              }
             }
           }
+
+          console.log(`✅ RESULT: Inserted=${inserted}, Duplicates=${duplicates}, Errors=${errors.length}\n`);
+
           successResponse(res, {
             message: 'Bulk upload completed',
             data: {
@@ -524,15 +553,34 @@ exports.bulkAddStudents = async (req, res) => {
             }
           });
         } catch (err) {
+          console.error('❌ End handler error:', err);
           errorResponse(res, err.message, 500);
         }
       })
       .on('error', (err) => {
+        console.error('❌ CSV stream error:', err);
         errorResponse(res, `CSV parsing error: ${err.message}`, 500);
       });
   } catch (error) {
-    console.error('Bulk upload error:', error);
+    console.error('❌ Bulk upload error:', error);
     errorResponse(res, error.message, 500);
+  }
+};
+
+// ✅ NEW - Download CSV template
+exports.downloadTemplate = async (req, res) => {
+  try {
+    const csvContent = `matricNumber,fullname,department,faculty,level,sessionYear,email,phone
+CSC/2020/001,John Doe,Computer Science,Science,300,2024/2025,john@example.com,08012345678
+CSC/2020/002,Jane Smith,Computer Science,Science,300,2024/2025,jane@example.com,08087654321
+EEE/2019/045,Bob Johnson,Electrical Engineering,Engineering,400,2024/2025,bob@example.com,08055554444`;
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="student-registry-template.csv"');
+    res.send(csvContent);
+  } catch (error) {
+    console.error('Template download error:', error);
+    res.status(500).json({ success: false, message: 'Failed to download template' });
   }
 };
 

@@ -1,564 +1,472 @@
-// src/controllers/studentRegistryController.js (COMPLETE UPDATE)
+// src/controllers/studentRegistryController.js
+const XLSX = require("xlsx");
+const StudentRegistry = require("../models/StudentRegistry");
+const User = require("../models/User");
+const { successResponse, errorResponse } = require("../utils/responses");
 
-const xlsx = require('xlsx');
-const StudentRegistry = require('../models/StudentRegistry');
-const User = require('../models/User');
-const { successResponse, errorResponse } = require('../utils/responses');
+const REQUIRED_FIELDS = ["matricNumber", "fullname", "department", "faculty", "level"];
 
-// @desc    Upload student registry from Excel
-// @route   POST /api/sug/student-registry/upload
-// @access  Private (SUG/Admin)
+function normalizeHeaderKey(key) {
+  return String(key ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+// Supports your preferred header names like "Matric Number", "Full Name", "Session Year"
+const HEADER_ALIASES = {
+  matricnumber: "matricNumber",
+  matricno: "matricNumber",
+  regno: "matricNumber",
+  registrationnumber: "matricNumber",
+
+  fullname: "fullname",
+  fullnames: "fullname",
+  studentname: "fullname",
+  name: "fullname",
+  full_name: "fullname",
+
+  department: "department",
+  dept: "department",
+
+  faculty: "faculty",
+  college: "faculty",
+
+  level: "level",
+  currentlevel: "level",
+
+  sessionyear: "sessionYear",
+  session: "sessionYear",
+  academicyear: "sessionYear",
+
+  email: "email",
+  phone: "phone",
+  status: "status",
+};
+
+function isRowEmpty(rowArr) {
+  return (rowArr || []).every((cell) => String(cell ?? "").trim() === "");
+}
+
+function findHeaderRowIndex(aoa, scanRows = 15) {
+  let bestIndex = -1;
+  let bestScore = 0;
+
+  const max = Math.min(scanRows, aoa.length);
+  for (let i = 0; i < max; i++) {
+    const row = aoa[i] || [];
+    const tokens = row.map(normalizeHeaderKey);
+
+    const canonicalFields = new Set(tokens.map((t) => HEADER_ALIASES[t]).filter(Boolean));
+
+    let score = 0;
+    for (const req of REQUIRED_FIELDS) if (canonicalFields.has(req)) score++;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = i;
+    }
+  }
+
+  return bestScore >= 3 ? bestIndex : -1;
+}
+
+function buildRecordsFromSheet(sheet) {
+  const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+  if (!aoa.length) return { headerIndex: -1, records: [] };
+
+  const headerIndex = findHeaderRowIndex(aoa);
+  if (headerIndex === -1) return { headerIndex: -1, records: [] };
+
+  const rawHeaders = (aoa[headerIndex] || []).map((h) => String(h ?? "").trim());
+  const canonicalHeaders = rawHeaders
+    .map(normalizeHeaderKey)
+    .map((t) => HEADER_ALIASES[t] || null);
+
+  const records = [];
+  for (let i = headerIndex + 1; i < aoa.length; i++) {
+    const rowArr = aoa[i] || [];
+    if (isRowEmpty(rowArr)) continue;
+
+    const obj = { __row: i + 1 };
+    for (let c = 0; c < canonicalHeaders.length; c++) {
+      const field = canonicalHeaders[c];
+      if (!field) continue;
+
+      const val = String(rowArr[c] ?? "").trim();
+      if (val !== "") obj[field] = val;
+    }
+    records.push(obj);
+  }
+
+  return { headerIndex, records };
+}
+
+// ==================== UPLOAD ====================
+// @route POST /api/sug/student-registry/upload
 exports.uploadStudentRegistry = async (req, res) => {
   try {
-    if (!req.file) {
-      return errorResponse(res, 'Please upload an Excel file', 400);
+    if (!req.file?.buffer) {
+      return errorResponse(res, "Please upload an Excel/CSV file", 400);
     }
 
-    // Read Excel file
-    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
     const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    const data = xlsx.utils.sheet_to_json(worksheet);
+    const sheet = workbook.Sheets[sheetName];
 
-    if (data.length === 0) {
-      return errorResponse(res, 'Excel file is empty', 400);
+    const { headerIndex, records } = buildRecordsFromSheet(sheet);
+    if (headerIndex === -1) {
+      return errorResponse(
+        res,
+        "Could not detect header row. Please use the template header: Matric Number, Full Name, Department, Faculty, Level, Session Year",
+        400
+      );
+    }
+    if (!records.length) {
+      return errorResponse(res, "No data rows found in spreadsheet", 400);
     }
 
-    console.log('📊 Processing', data.length, 'student records...');
-
-    // Validate and prepare data
-    const students = [];
     const errors = [];
+    const seen = new Set();
 
-    data.forEach((row, index) => {
-      const rowNum = index + 2; // Excel row number (header is row 1)
+    const defaultSessionYear = (() => {
+      const y = new Date().getFullYear();
+      return `${y}/${y + 1}`;
+    })();
 
-      // Validate required fields
-      if (!row.matricNumber || !row.fullname || !row.department || !row.faculty || !row.level) {
-        errors.push(`Row ${rowNum}: Missing required fields (matricNumber, fullname, department, faculty, level)`);
-        return;
+    const cleaned = records.map((r) => {
+      const rowNum = r.__row;
+      delete r.__row;
+
+      const matricNumber = String(r.matricNumber || "").trim().toUpperCase();
+      const fullname = String(r.fullname || "").trim();
+      const department = String(r.department || "").trim();
+      const faculty = String(r.faculty || "").trim();
+      const level = parseInt(String(r.level || "").trim(), 10);
+
+      const missing = [];
+      if (!matricNumber) missing.push("matricNumber");
+      if (!fullname) missing.push("fullname");
+      if (!department) missing.push("department");
+      if (!faculty) missing.push("faculty");
+      if (!Number.isFinite(level)) missing.push("level");
+
+      if (missing.length) {
+        errors.push(`Row ${rowNum}: Missing required fields (${missing.join(", ")})`);
       }
 
-      // Validate level
-      const level = parseInt(row.level);
-      if (![100, 200, 300, 400, 500, 600].includes(level)) {
-        errors.push(`Row ${rowNum}: Invalid level (${row.level}). Must be 100, 200, 300, 400, 500, or 600`);
-        return;
+      if (Number.isFinite(level) && ![100, 200, 300, 400, 500, 600].includes(level)) {
+        errors.push(`Row ${rowNum}: Invalid level (${r.level}). Must be 100,200,300,400,500,600`);
       }
 
-      students.push({
-        matricNumber: String(row.matricNumber).trim().toUpperCase(),
-        fullname: String(row.fullname).trim(),
-        department: String(row.department).trim(),
-        faculty: String(row.faculty).trim(),
-        level: level,
-        sessionYear: row.sessionYear?.trim() || new Date().getFullYear() + '/' + (new Date().getFullYear() + 1),
-        status: 'active'
-      });
+      if (matricNumber) {
+        if (seen.has(matricNumber)) errors.push(`Row ${rowNum}: Duplicate matric number (${matricNumber}) in file`);
+        seen.add(matricNumber);
+      }
+
+      const sessionYear = String(r.sessionYear || "").trim();
+      const email = String(r.email || "").trim().toLowerCase();
+      const phone = String(r.phone || "").trim();
+      const status = String(r.status || "").trim().toLowerCase();
+
+      const set = { fullname, department, faculty, level };
+      if (sessionYear) set.sessionYear = sessionYear;
+      if (email) set.email = email;
+      if (phone) set.phone = phone;
+      if (["active", "graduated", "suspended"].includes(status)) set.status = status;
+
+      return { matricNumber, set };
     });
 
-    if (errors.length > 0) {
-      return errorResponse(res, 'Validation errors found', 400, errors);
-    }
+    if (errors.length) return errorResponse(res, "Validation errors found", 400, errors);
 
-    // Insert students in batches
-    let imported = 0;
-    let duplicates = 0;
-    let failed = 0;
+    const ops = cleaned.map(({ matricNumber, set }) => ({
+      updateOne: {
+        filter: { matricNumber }, // ✅ normalized uppercase => matches existing
+        update: {
+          $set: set,
+          $setOnInsert: {
+            matricNumber,
+            sessionYear: set.sessionYear || defaultSessionYear,
+            status: set.status || "active",
+            isRegistered: false,
+            addedBy: req.user?._id,
+          },
+        },
+        upsert: true,
+      },
+    }));
 
-    const batchSize = 100;
-    for (let i = 0; i < students.length; i += batchSize) {
-      const batch = students.slice(i, i + batchSize);
-      
-      try {
-        await StudentRegistry.insertMany(batch, { ordered: false });
-        imported += batch.length;
-        console.log(`✅ Imported batch ${Math.floor(i / batchSize) + 1}: ${batch.length} students`);
-      } catch (error) {
-        // Handle duplicate key errors
-        if (error.code === 11000) {
-          const duplicateCount = error.writeErrors?.length || 0;
-          imported += batch.length - duplicateCount;
-          duplicates += duplicateCount;
-          console.log(`⚠️  Batch ${Math.floor(i / batchSize) + 1}: ${duplicateCount} duplicates skipped`);
-        } else {
-          failed += batch.length;
-          console.error(`❌ Batch ${Math.floor(i / batchSize) + 1} failed:`, error.message);
-        }
-      }
-    }
+    const result = await StudentRegistry.bulkWrite(ops, { ordered: false });
 
-    successResponse(res, {
-      message: 'Student registry uploaded successfully',
+    return successResponse(res, {
+      message: "Student registry uploaded successfully",
       data: {
-        total: data.length,
-        imported,
-        duplicates,
-        failed,
-        errors: errors.length > 0 ? errors : undefined
-      }
-    }, 201);
-
-  } catch (error) {
-    console.error('Upload error:', error);
-    errorResponse(res, error.message || 'Upload failed', 500);
+        upserted: result.upsertedCount || 0,
+        modified: result.modifiedCount || 0,
+        matched: result.matchedCount || 0,
+      },
+    });
+  } catch (err) {
+    return errorResponse(res, err.message || "Upload failed", 500);
   }
 };
 
-// @desc    Get all students in registry
-// @route   GET /api/sug/student-registry
-// @access  Private (SUG/Admin)
+// ==================== LIST ====================
+// @route GET /api/sug/student-registry
 exports.getStudentRegistry = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = Math.max(parseInt(req.query.page || "1", 10), 1);
+    const limit = Math.max(parseInt(req.query.limit || "20", 10), 1);
     const skip = (page - 1) * limit;
+
     const { search, faculty, department, level, status } = req.query;
 
-    let query = {};
+    const query = {};
+    if (faculty) query.faculty = String(faculty).trim();
+    if (department) query.department = String(department).trim();
+    if (level) query.level = parseInt(level, 10);
+    if (status) query.status = String(status).trim();
 
     if (search) {
+      const s = String(search).trim();
       query.$or = [
-        { matricNumber: { $regex: search, $options: 'i' } },
-        { fullname: { $regex: search, $options: 'i' } }
+        { matricNumber: { $regex: s, $options: "i" } },
+        { fullname: { $regex: s, $options: "i" } },
       ];
     }
 
-    if (faculty) query.faculty = faculty;
-    if (department) query.department = department;
-    if (level) query.level = parseInt(level);
-    if (status) query.status = status;
-
-    const students = await StudentRegistry.find(query)
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .skip(skip);
-
-    const total = await StudentRegistry.countDocuments(query);
-
-    // Get statistics
-    const stats = await StudentRegistry.aggregate([
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          byStatus: {
-            $push: {
-              status: '$status',
-              count: 1
-            }
-          },
-          byFaculty: {
-            $push: {
-              faculty: '$faculty',
-              count: 1
-            }
-          }
-        }
-      }
+    const [students, total] = await Promise.all([
+      StudentRegistry.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      StudentRegistry.countDocuments(query),
     ]);
 
-    const statusCounts = await StudentRegistry.aggregate([
-      { $group: { _id: '$status', count: { $sum: 1 } } }
-    ]);
-
-    const facultyCounts = await StudentRegistry.aggregate([
-      { $group: { _id: '$faculty', count: { $sum: 1 } } }
-    ]);
-
-    successResponse(res, {
-      message: 'Student registry retrieved',
+    return successResponse(res, {
+      message: "Student registry retrieved",
       data: {
         students,
-        statistics: {
-          total,
-          byStatus: statusCounts,
-          byFaculty: facultyCounts
-        },
         pagination: {
           page,
           limit,
           total,
-          pages: Math.ceil(total / limit)
-        }
-      }
+          pages: Math.ceil(total / limit),
+        },
+      },
     });
-
-  } catch (error) {
-    console.error('Get registry error:', error);
-    errorResponse(res, error.message, 500);
+  } catch (err) {
+    return errorResponse(res, err.message, 500);
   }
 };
 
-// @desc    Add single student manually
-// @route   POST /api/sug/student-registry
-// @access  Private (SUG/Admin)
+// ==================== ADD SINGLE ====================
 exports.addStudent = async (req, res) => {
   try {
     const { matricNumber, fullname, department, faculty, level, sessionYear } = req.body;
 
-    // Validate required fields
     if (!matricNumber || !fullname || !department || !faculty || !level) {
-      return errorResponse(res, 'All fields are required', 400);
+      return errorResponse(res, "All fields are required", 400);
     }
 
-    // Validate level
-    if (![100, 200, 300, 400, 500, 600].includes(parseInt(level))) {
-      return errorResponse(res, 'Invalid level. Must be 100, 200, 300, 400, 500, or 600', 400);
+    const levelNum = parseInt(level, 10);
+    if (![100, 200, 300, 400, 500, 600].includes(levelNum)) {
+      return errorResponse(res, "Invalid level. Must be 100, 200, 300, 400, 500, or 600", 400);
     }
 
-    // Check if matric number already exists
-    const existing = await StudentRegistry.findOne({ 
-      matricNumber: matricNumber.toUpperCase().trim() 
-    });
-
-    if (existing) {
-      return errorResponse(res, 'Matric number already exists in registry', 400);
-    }
+    const exists = await StudentRegistry.findOne({ matricNumber: String(matricNumber).trim().toUpperCase() });
+    if (exists) return errorResponse(res, "Matric number already exists in registry", 400);
 
     const student = await StudentRegistry.create({
-      matricNumber: matricNumber.toUpperCase().trim(),
-      fullname: fullname.trim(),
-      department: department.trim(),
-      faculty: faculty.trim(),
-      level: parseInt(level),
-      sessionYear: sessionYear?.trim() || new Date().getFullYear() + '/' + (new Date().getFullYear() + 1),
-      status: 'active'
+      matricNumber: String(matricNumber).trim().toUpperCase(),
+      fullname: String(fullname).trim(),
+      department: String(department).trim(),
+      faculty: String(faculty).trim(),
+      level: levelNum,
+      sessionYear: sessionYear?.trim(),
+      status: "active",
+      addedBy: req.user?._id,
     });
 
-    successResponse(res, {
-      message: 'Student added to registry successfully',
-      data: { student }
-    }, 201);
-
-  } catch (error) {
-    console.error('Add student error:', error);
-    errorResponse(res, error.message, 500);
+    return successResponse(res, { message: "Student added successfully", data: { student } }, 201);
+  } catch (err) {
+    return errorResponse(res, err.message, 500);
   }
 };
 
-// @desc    Update student record
-// @route   PUT /api/sug/student-registry/:id
-// @access  Private (SUG/Admin)
+// ==================== UPDATE / DELETE ====================
 exports.updateStudent = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { fullname, department, faculty, level, sessionYear, status } = req.body;
-
-    const student = await StudentRegistry.findById(id);
-
-    if (!student) {
-      return errorResponse(res, 'Student not found in registry', 404);
-    }
-
-    // Update fields
-    if (fullname) student.fullname = fullname.trim();
-    if (department) student.department = department.trim();
-    if (faculty) student.faculty = faculty.trim();
-    if (level) {
-      const levelNum = parseInt(level);
-      if (![100, 200, 300, 400, 500, 600].includes(levelNum)) {
-        return errorResponse(res, 'Invalid level', 400);
-      }
-      student.level = levelNum;
-    }
-    if (sessionYear) student.sessionYear = sessionYear.trim();
-    if (status) {
-      if (!['active', 'graduated', 'suspended'].includes(status)) {
-        return errorResponse(res, 'Invalid status', 400);
-      }
-      student.status = status;
-    }
-
-    await student.save();
-
-    successResponse(res, {
-      message: 'Student record updated successfully',
-      data: { student }
+    const updated = await StudentRegistry.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+      runValidators: true,
     });
+    if (!updated) return errorResponse(res, "Student not found", 404);
 
-  } catch (error) {
-    console.error('Update student error:', error);
-    errorResponse(res, error.message, 500);
+    return successResponse(res, { message: "Student updated", data: { student: updated } });
+  } catch (err) {
+    return errorResponse(res, err.message, 500);
   }
 };
 
-// @desc    Delete student from registry
-// @route   DELETE /api/sug/student-registry/:id
-// @access  Private (SUG/Admin)
 exports.deleteStudent = async (req, res) => {
   try {
-    const { id } = req.params;
+    const student = await StudentRegistry.findById(req.params.id);
+    if (!student) return errorResponse(res, "Student not found", 404);
 
-    const student = await StudentRegistry.findById(id);
-
-    if (!student) {
-      return errorResponse(res, 'Student not found in registry', 404);
-    }
-
-    // Check if student has already registered as user
-    const registeredUser = await User.findOne({ 
-      matricNumber: student.matricNumber 
-    });
-
+    const registeredUser = await User.findOne({ matricNumber: student.matricNumber });
     if (registeredUser) {
       return errorResponse(
-        res, 
-        'Cannot delete: Student has already registered on the platform. Please suspend the user account instead.',
+        res,
+        "Cannot delete: Student has registered on the platform. Suspend instead.",
         400
       );
     }
 
     await student.deleteOne();
-
-    successResponse(res, {
-      message: 'Student deleted from registry successfully'
-    });
-
-  } catch (error) {
-    console.error('Delete student error:', error);
-    errorResponse(res, error.message, 500);
+    return successResponse(res, { message: "Student deleted" });
+  } catch (err) {
+    return errorResponse(res, err.message, 500);
   }
 };
 
-// @desc    Bulk update student status
-// @route   PUT /api/sug/student-registry/bulk-update
-// @access  Private (SUG/Admin)
+// ==================== BULK UPDATE STATUS ====================
 exports.bulkUpdateStatus = async (req, res) => {
   try {
-    const { studentIds, status } = req.body;
+    const ids = req.body.ids || req.body.studentIds;
+    const { status } = req.body;
 
-    if (!studentIds || !Array.isArray(studentIds) || studentIds.length === 0) {
-      return errorResponse(res, 'Student IDs array is required', 400);
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return errorResponse(res, "Student IDs array is required", 400);
+    }
+    if (!["active", "graduated", "suspended"].includes(status)) {
+      return errorResponse(res, "Invalid status", 400);
     }
 
-    if (!['active', 'graduated', 'suspended'].includes(status)) {
-      return errorResponse(res, 'Invalid status', 400);
-    }
+    const result = await StudentRegistry.updateMany({ _id: { $in: ids } }, { $set: { status } });
 
-    const result = await StudentRegistry.updateMany(
-      { _id: { $in: studentIds } },
-      { $set: { status } }
-    );
-
-    successResponse(res, {
-      message: `${result.modifiedCount} student(s) updated successfully`,
-      data: {
-        matched: result.matchedCount,
-        modified: result.modifiedCount
-      }
+    return successResponse(res, {
+      message: `${result.modifiedCount} student(s) updated`,
+      data: { matched: result.matchedCount, modified: result.modifiedCount },
     });
-
-  } catch (error) {
-    console.error('Bulk update error:', error);
-    errorResponse(res, error.message, 500);
+  } catch (err) {
+    return errorResponse(res, err.message, 500);
   }
 };
 
-// @desc    Download registry template
-// @route   GET /api/sug/student-registry/template
-// @access  Private (SUG/Admin)
+// ==================== TEMPLATE / EXPORT ====================
 exports.downloadTemplate = async (req, res) => {
   try {
-    const template = [
-      {
-        matricNumber: 'CS/2020/001',
-        fullname: 'John Doe',
-        department: 'Computer Science',
-        faculty: 'Science',
-        level: 400,
-        sessionYear: '2023/2024'
-      },
-      {
-        matricNumber: 'ENG/2021/050',
-        fullname: 'Jane Smith',
-        department: 'Electrical Engineering',
-        faculty: 'Engineering',
-        level: 300,
-        sessionYear: '2023/2024'
-      },
-      {
-        matricNumber: 'MED/2019/010',
-        fullname: 'David Brown',
-        department: 'Medicine and Surgery',
-        faculty: 'Medicine',
-        level: 500,
-        sessionYear: '2023/2024'
-      }
-    ];
+    const header = ["Matric Number", "Full Name", "Department", "Faculty", "Level", "Session Year", "Email", "Phone", "Status"];
+    const example = ["CS/2020/001", "John Doe", "Computer Science", "Science", 400, "2026/2027", "john@school.edu", "08012345678", "active"];
 
-    const ws = xlsx.utils.json_to_sheet(template);
-    
-    // Set column widths
-    ws['!cols'] = [
-      { wch: 15 }, // matricNumber
-      { wch: 25 }, // fullname
-      { wch: 25 }, // department
-      { wch: 20 }, // faculty
-      { wch: 8 },  // level
-      { wch: 12 }  // sessionYear
-    ];
+    const ws = XLSX.utils.aoa_to_sheet([header, example]);
+    ws["!cols"] = [{ wch: 18 }, { wch: 25 }, { wch: 25 }, { wch: 18 }, { wch: 8 }, { wch: 12 }, { wch: 25 }, { wch: 15 }, { wch: 12 }];
 
-    const wb = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(wb, ws, 'Students');
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Students");
 
-    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename=student_registry_template.xlsx');
-    res.send(buffer);
-
-  } catch (error) {
-    console.error('Template download error:', error);
-    errorResponse(res, error.message, 500);
+    res.setHeader("Content-Disposition", "attachment; filename=student_registry_template.xlsx");
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return res.send(buffer);
+  } catch (err) {
+    return errorResponse(res, err.message, 500);
   }
 };
 
-// @desc    Export student registry to Excel
-// @route   GET /api/sug/student-registry/export
-// @access  Private (SUG/Admin)
 exports.exportRegistry = async (req, res) => {
   try {
     const { faculty, department, level, status } = req.query;
 
-    let query = {};
-    if (faculty) query.faculty = faculty;
-    if (department) query.department = department;
-    if (level) query.level = parseInt(level);
-    if (status) query.status = status;
+    const query = {};
+    if (faculty) query.faculty = String(faculty).trim();
+    if (department) query.department = String(department).trim();
+    if (level) query.level = parseInt(level, 10);
+    if (status) query.status = String(status).trim();
 
     const students = await StudentRegistry.find(query)
-      .select('matricNumber fullname department faculty level sessionYear status')
-      .sort({ faculty: 1, department: 1, matricNumber: 1 })
-      .lean();
+      .select("matricNumber fullname department faculty level sessionYear email phone status")
+      .sort({ faculty: 1, department: 1, matricNumber: 1 });
 
-    if (students.length === 0) {
-      return errorResponse(res, 'No students found to export', 404);
-    }
+    if (!students.length) return errorResponse(res, "No students found to export", 404);
 
-    // Format data for Excel
-    const excelData = students.map(student => ({
-      'Matric Number': student.matricNumber,
-      'Full Name': student.fullname,
-      'Department': student.department,
-      'Faculty': student.faculty,
-      'Level': student.level,
-      'Session': student.sessionYear,
-      'Status': student.status
+    const excelData = students.map((s) => ({
+      "Matric Number": s.matricNumber,
+      "Full Name": s.fullname,
+      Department: s.department,
+      Faculty: s.faculty,
+      Level: s.level,
+      "Session Year": s.sessionYear,
+      Email: s.email || "",
+      Phone: s.phone || "",
+      Status: s.status,
     }));
 
-    const ws = xlsx.utils.json_to_sheet(excelData);
-    
-    // Set column widths
-    ws['!cols'] = [
-      { wch: 15 },
-      { wch: 25 },
-      { wch: 25 },
-      { wch: 20 },
-      { wch: 8 },
-      { wch: 12 },
-      { wch: 12 }
-    ];
+    const ws = XLSX.utils.json_to_sheet(excelData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Student Registry");
 
-    const wb = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(wb, ws, 'Student Registry');
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
-    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
-
-    const filename = `student_registry_${new Date().toISOString().split('T')[0]}.xlsx`;
-
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
-    res.send(buffer);
-
-  } catch (error) {
-    console.error('Export error:', error);
-    errorResponse(res, error.message, 500);
+    res.setHeader("Content-Disposition", `attachment; filename=student_registry_${new Date().toISOString().split("T")[0]}.xlsx`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return res.send(buffer);
+  } catch (err) {
+    return errorResponse(res, err.message, 500);
   }
 };
 
-// @desc    Get registry statistics
-// @route   GET /api/sug/student-registry/statistics
-// @access  Private (SUG/Admin)
+// ==================== STATISTICS / SEARCH ====================
 exports.getRegistryStatistics = async (req, res) => {
   try {
     const totalStudents = await StudentRegistry.countDocuments();
-    
-    const byStatus = await StudentRegistry.aggregate([
-      { $group: { _id: '$status', count: { $sum: 1 } } }
-    ]);
+    const registeredUsers = await User.countDocuments({ role: "student" });
 
+    const byStatus = await StudentRegistry.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]);
     const byFaculty = await StudentRegistry.aggregate([
-      { $group: { _id: '$faculty', count: { $sum: 1 } } },
-      { $sort: { count: -1 } }
-    ]);
-
-    const byLevel = await StudentRegistry.aggregate([
-      { $group: { _id: '$level', count: { $sum: 1 } } },
-      { $sort: { _id: 1 } }
-    ]);
-
-    const byDepartment = await StudentRegistry.aggregate([
-      { $group: { _id: { faculty: '$faculty', department: '$department' }, count: { $sum: 1 } } },
+      { $group: { _id: "$faculty", count: { $sum: 1 } } },
       { $sort: { count: -1 } },
-      { $limit: 10 }
+    ]);
+    const byLevel = await StudentRegistry.aggregate([
+      { $group: { _id: "$level", count: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
     ]);
 
-    const registeredUsers = await User.countDocuments({ role: 'student' });
-
-    successResponse(res, {
-      message: 'Registry statistics retrieved',
+    return successResponse(res, {
+      message: "Registry statistics retrieved",
       data: {
         totalStudents,
         registeredUsers,
-        registrationRate: totalStudents > 0 ? ((registeredUsers / totalStudents) * 100).toFixed(2) + '%' : '0%',
-        byStatus: byStatus.reduce((acc, item) => {
-          acc[item._id] = item.count;
-          return acc;
-        }, {}),
+        registrationRate: totalStudents > 0 ? ((registeredUsers / totalStudents) * 100).toFixed(2) + "%" : "0%",
+        byStatus,
         byFaculty,
         byLevel,
-        topDepartments: byDepartment
-      }
+      },
     });
-
-  } catch (error) {
-    console.error('Get statistics error:', error);
-    errorResponse(res, error.message, 500);
+  } catch (err) {
+    return errorResponse(res, err.message, 500);
   }
 };
 
-// @desc    Search students for verification
-// @route   GET /api/sug/student-registry/search
-// @access  Private (SUG/Admin)
 exports.searchStudent = async (req, res) => {
   try {
-    const { query } = req.query;
-
-    if (!query || query.length < 3) {
-      return errorResponse(res, 'Search query must be at least 3 characters', 400);
-    }
+    const q = String(req.query.q || req.query.query || "").trim();
+    if (!q || q.length < 3) return errorResponse(res, "Search query must be at least 3 characters", 400);
 
     const students = await StudentRegistry.find({
       $or: [
-        { matricNumber: { $regex: query, $options: 'i' } },
-        { fullname: { $regex: query, $options: 'i' } }
+        { matricNumber: { $regex: q, $options: "i" } },
+        { fullname: { $regex: q, $options: "i" } },
       ],
-      status: 'active'
     })
-    .limit(20)
-    .select('matricNumber fullname department faculty level status');
+      .limit(20)
+      .select("matricNumber fullname department faculty level sessionYear status");
 
-    successResponse(res, {
-      message: 'Search results',
-      data: {
-        students,
-        count: students.length
-      }
-    });
-
-  } catch (error) {
-    console.error('Search error:', error);
-    errorResponse(res, error.message, 500);
+    return successResponse(res, { message: "Search results", data: { students, count: students.length } });
+  } catch (err) {
+    return errorResponse(res, err.message, 500);
   }
 };
