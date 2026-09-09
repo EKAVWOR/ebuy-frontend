@@ -1,49 +1,40 @@
 // src/routes/sugRoutes.js
-
-const express = require('express');
+const express = require("express");
 const router = express.Router();
 
-const {
-  getDashboardStats,
-  getUsers,
-  getPendingVendors,
-  approveVendor,
-  verifyStudent,
-  getAllStores,
-  getPendingStores,
-  getStoreDetails,
-  approveStore,
-  updateStoreStatus,
-  getCommissionEarnings,
-  getTransactionReports
-} = require('../controllers/sugController');
-
-const { protect, authorize } = require('../middleware/authMiddleware');
+const sugController = require("../controllers/sugController");
+const { protect, authorize } = require("../middleware/authMiddleware");
 
 router.use(protect);
-router.use(authorize('sug'));
+router.use(authorize("sug"));
+
+// helper: ensure handler exists
+const mustBeFn = (name) => {
+  const fn = sugController[name];
+  if (typeof fn !== "function") {
+    throw new Error(`sugController.${name} is undefined. Check exports in src/controllers/sugController.js`);
+  }
+  return fn;
+};
 
 // Dashboard
-router.get('/dashboard', getDashboardStats);
+router.get("/dashboard", mustBeFn("getDashboardStats"));
 
 // User Management
-router.get('/users', getUsers);
-router.get('/pending-vendors', getPendingVendors);
-router.put('/verify-student/:userId', verifyStudent);
-router.put('/approve-vendor/:userId', approveVendor);
+router.get("/users", mustBeFn("getUsers"));
+router.get("/pending-vendors", mustBeFn("getPendingVendors"));
+router.put("/verify-student/:userId", mustBeFn("verifyStudent"));
+router.put("/approve-vendor/:userId", mustBeFn("approveVendor"));
 
 // Store Management
-router.get('/stores', getAllStores);
-router.get('/pending-stores', getPendingStores);
-router.get('/stores/:storeId', getStoreDetails);
-router.put('/stores/:storeId/approve', approveStore);
-router.put('/stores/:storeId/status', updateStoreStatus);
+router.get("/stores", mustBeFn("getAllStores"));
+router.get("/pending-stores", mustBeFn("getPendingStores"));
+router.get("/stores/:storeId", mustBeFn("getStoreDetails"));
+router.put("/stores/:storeId/approve", mustBeFn("approveStore"));
+router.put("/stores/:storeId/status", mustBeFn("updateStoreStatus"));
 
 // Reports
-router.get('/commission-earnings', getCommissionEarnings);
-router.get('/transaction-reports', getTransactionReports);
-
-// ✅ Student registry is now handled by studentRegistryRoutes.js
-// Mounted at /api/sug/student-registry
+router.get("/commission-earnings", mustBeFn("getCommissionEarnings"));
+router.get("/transaction-reports", mustBeFn("getTransactionReports"));
 
 module.exports = router;

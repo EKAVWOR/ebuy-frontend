@@ -53,9 +53,8 @@ class OrderService {
         });
       }
 
-      // Calculate platform fee (10%)
-      const platformFee = subtotal * 0.10;
-      const totalAmount = subtotal + platformFee;
+      const platformFee = 0;
+const totalAmount = subtotal; // buyer pays subtotal only
 
       // Create order
       const order = await Order.create({

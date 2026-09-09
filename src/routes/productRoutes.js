@@ -1,48 +1,46 @@
-// src/routes/productRoutes.js (UPDATED)
+// src/routes/productRoutes.js
 
-const express = require('express');
+const express = require("express");
 const router = express.Router();
+
 const {
   createProduct,
   getProducts,
   getProduct,
   updateProduct,
   deleteProduct,
-  getVendorProducts
-} = require('../controllers/productController');
-const { protect, authorize, isProductOwner } = require('../middleware/authMiddleware');
-const { checkProductLimit, checkImageLimit } = require('../middleware/SubscriptionMiddleware');
-const { validateProduct } = require('../middleware/validationMiddleware');
-const { upload } = require('../middleware/uploadMiddleware');
+  getVendorProducts,
+} = require("../controllers/productController");
 
-// Public routes
-router.get('/', getProducts);
-router.get('/:id', getProduct);
+const { protect, authorize, isProductOwner } = require("../middleware/authMiddleware");
+const { validateProduct } = require("../middleware/validationMiddleware");
+const { upload } = require("../middleware/uploadMiddleware");
 
-// Vendor routes - ADD SUBSCRIPTION CHECKS
+// ==================== PUBLIC ROUTES ====================
+router.get("/", getProducts);
+router.get("/:id", getProduct);
+
+// ==================== VENDOR ROUTES (NO SUBSCRIPTION) ====================
+router.get("/vendor/my-products", protect, authorize("vendor"), getVendorProducts);
+
 router.post(
-  '/', 
-  protect, 
-  authorize('vendor'), 
-  upload.array('images', 10),  // Max 10 but will be limited by subscription
-  checkImageLimit,  // NEW - Check image limits based on plan
-  checkProductLimit,  // NEW - Check product count limits
-  validateProduct, 
+  "/",
+  protect,
+  authorize("vendor"),
+  upload.array("images", 10), // keep max 10 as a hard limit
+  validateProduct,
   createProduct
 );
 
-router.get('/vendor/my-products', protect, authorize('vendor'), getVendorProducts);
-
 router.put(
-  '/:id', 
-  protect, 
-  authorize('vendor'), 
-  isProductOwner, 
-  upload.array('images', 10),
-  checkImageLimit,  // NEW
+  "/:id",
+  protect,
+  authorize("vendor"),
+  isProductOwner,
+  upload.array("images", 10),
   updateProduct
 );
 
-router.delete('/:id', protect, authorize('vendor'), isProductOwner, deleteProduct);
+router.delete("/:id", protect, authorize("vendor"), isProductOwner, deleteProduct);
 
 module.exports = router;

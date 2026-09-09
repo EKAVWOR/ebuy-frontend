@@ -56,7 +56,7 @@ const orderSchema = new mongoose.Schema({
   },
   platformFee: {
     type: Number,
-    required: true,
+    min:0,
     default: 0
   },
   totalAmount: {

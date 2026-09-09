@@ -1,47 +1,45 @@
 // src/controllers/sugController.js
 
-const User = require('../models/User');
-const Store = require('../models/Store');
-const Order = require('../models/Order');
-const SugCommission = require('../models/SugCommission');
-const StudentRegistry = require('../models/StudentRegistry');
-const commissionService = require('../services/CommissionService');
-const { successResponse, errorResponse } = require('../utils/responses');
-const fs = require('fs');
-const csv = require('csv-parser');
+const User = require("../models/User");
+const Store = require("../models/Store");
+const Order = require("../models/Order");
+const SugCommission = require("../models/SugCommission");
+const StudentRegistry = require("../models/StudentRegistry");
+const commissionService = require("../services/commissionService"); // must match actual filename
+const { successResponse, errorResponse } = require("../utils/responses");
 
 // ==================== DASHBOARD ====================
 
 exports.getDashboardStats = async (req, res) => {
   try {
-    const totalStudents = await User.countDocuments({ role: 'student', verified: true });
-    const totalVendors = await User.countDocuments({ role: 'vendor' });
-    const activeVendors = await User.countDocuments({ role: 'vendor', status: 'active' });
-    const pendingVendors = await User.countDocuments({ role: 'vendor', status: 'pending' });
-    const totalOrders = await Order.countDocuments({ paymentStatus: 'paid' });
+    const totalStudents = await User.countDocuments({ role: "student", verified: true });
+    const totalVendors = await User.countDocuments({ role: "vendor" });
+    const activeVendors = await User.countDocuments({ role: "vendor", status: "active" });
+    const pendingVendors = await User.countDocuments({ role: "vendor", status: "pending" });
+    const totalOrders = await Order.countDocuments({ paymentStatus: "paid" });
     const registrySize = await StudentRegistry.countDocuments();
 
     const totalStores = await Store.countDocuments();
-    const pendingStores = await Store.countDocuments({ isApproved: false, status: 'pending' });
-    const activeStores = await Store.countDocuments({ isApproved: true, status: 'active' });
+    const pendingStores = await Store.countDocuments({ isApproved: false, status: "pending" });
+    const activeStores = await Store.countDocuments({ isApproved: true, status: "active" });
 
-    const earningsSummary = await commissionService.getSugEarnings(req.user.id);
+    const sugId = req.user._id;
+
+    const earningsSummary = await commissionService.getSugEarnings(sugId);
 
     const startOfMonth = new Date();
     startOfMonth.setDate(1);
     startOfMonth.setHours(0, 0, 0, 0);
 
-    const monthlyEarnings = await commissionService.getSugEarnings(
-      req.user.id, startOfMonth, new Date()
-    );
+    const monthlyEarnings = await commissionService.getSugEarnings(sugId, startOfMonth, new Date());
 
-    const recentTransactions = await SugCommission.find({ sugId: req.user.id })
-      .populate('orderId', 'orderNumber totalAmount')
+    const recentTransactions = await SugCommission.find({ sugId })
+      .populate("orderId", "orderNumber totalAmount")
       .sort({ createdAt: -1 })
       .limit(10);
 
-    successResponse(res, {
-      message: 'Dashboard stats retrieved successfully',
+    return successResponse(res, {
+      message: "Dashboard stats retrieved successfully",
       data: {
         statistics: {
           totalStudents,
@@ -53,15 +51,15 @@ exports.getDashboardStats = async (req, res) => {
           totalStores,
           pendingStores,
           activeStores,
-          totalEarnings: earningsSummary.totalEarnings,
-          monthlyEarnings: monthlyEarnings.totalEarnings
+          totalEarnings: earningsSummary.totalEarnings || 0,
+          monthlyEarnings: monthlyEarnings.totalEarnings || 0,
         },
-        recentTransactions
-      }
+        recentTransactions,
+      },
     });
   } catch (error) {
-    console.error('Get SUG dashboard error:', error);
-    errorResponse(res, error.message || 'Failed to get dashboard stats', 500);
+    console.error("Get SUG dashboard error:", error);
+    return errorResponse(res, error.message || "Failed to get dashboard stats", 500);
   }
 };
 
@@ -69,77 +67,79 @@ exports.getDashboardStats = async (req, res) => {
 
 exports.getUsers = async (req, res) => {
   try {
-    const { page = 1, limit = 20, role = '', status = '', verified = '', search = '' } = req.query;
+    const { page = 1, limit = 20, role = "", status = "", verified = "", search = "" } = req.query;
 
     const query = {};
-    if (role && ['student', 'vendor'].includes(role)) {
+
+    if (role && ["student", "vendor"].includes(role)) {
       query.role = role;
     } else {
-      query.role = { $in: ['student', 'vendor'] };
+      query.role = { $in: ["student", "vendor"] };
     }
 
     if (status) query.status = status;
-    if (verified !== '') query.verified = verified === 'true';
+    if (verified !== "") query.verified = verified === "true";
 
     if (search) {
       query.$or = [
-        { fullname: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { matricNumber: { $regex: search, $options: 'i' } },
-        { businessName: { $regex: search, $options: 'i' } }
+        { fullname: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+        { matricNumber: { $regex: search, $options: "i" } },
+        { businessName: { $regex: search, $options: "i" } },
       ];
     }
 
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+
     const users = await User.find(query)
       .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
-      .skip((parseInt(page) - 1) * parseInt(limit));
+      .limit(limitNum)
+      .skip((pageNum - 1) * limitNum)
+      .select("-password");
 
     const total = await User.countDocuments(query);
 
-    const totalStudents = await User.countDocuments({ role: 'student' });
-    const totalVendors = await User.countDocuments({ role: 'vendor' });
-    const pendingVendors = await User.countDocuments({ role: 'vendor', status: 'pending' });
-    const activeVendors = await User.countDocuments({ role: 'vendor', status: 'active' });
+    const totalStudents = await User.countDocuments({ role: "student" });
+    const totalVendors = await User.countDocuments({ role: "vendor" });
+    const pendingVendors = await User.countDocuments({ role: "vendor", status: "pending" });
+    const activeVendors = await User.countDocuments({ role: "vendor", status: "active" });
 
-    successResponse(res, {
-      message: 'Users retrieved successfully',
+    return successResponse(res, {
+      message: "Users retrieved successfully",
       data: {
         users,
         pagination: {
           total,
-          page: parseInt(page),
-          pages: Math.ceil(total / parseInt(limit)),
-          limit: parseInt(limit)
+          page: pageNum,
+          pages: Math.ceil(total / limitNum),
+          limit: limitNum,
         },
-        counts: { totalStudents, totalVendors, pendingVendors, activeVendors }
-      }
+        counts: { totalStudents, totalVendors, pendingVendors, activeVendors },
+      },
     });
   } catch (error) {
-    console.error('Get users error:', error);
-    errorResponse(res, error.message || 'Failed to get users', 500);
+    console.error("Get users error:", error);
+    return errorResponse(res, error.message || "Failed to get users", 500);
   }
 };
 
 exports.getPendingVendors = async (req, res) => {
   try {
     const pendingVendors = await User.find({
-      role: 'vendor',
-      $or: [{ status: 'pending' }, { verified: false }]
+      role: "vendor",
+      $or: [{ status: "pending" }, { verified: false }],
     })
       .sort({ createdAt: -1 })
-      .select('-password');
+      .select("-password");
 
-    successResponse(res, {
-      message: 'Pending vendors retrieved successfully',
-      data: {
-        vendors: pendingVendors,
-        count: pendingVendors.length
-      }
+    return successResponse(res, {
+      message: "Pending vendors retrieved successfully",
+      data: { vendors: pendingVendors, count: pendingVendors.length },
     });
   } catch (error) {
-    console.error('Get pending vendors error:', error);
-    errorResponse(res, error.message || 'Failed to get pending vendors', 500);
+    console.error("Get pending vendors error:", error);
+    return errorResponse(res, error.message || "Failed to get pending vendors", 500);
   }
 };
 
@@ -149,26 +149,27 @@ exports.approveVendor = async (req, res) => {
     const { approved, notes } = req.body;
 
     const user = await User.findById(userId);
-    if (!user) return errorResponse(res, 'User not found', 404);
-    if (user.role !== 'vendor') return errorResponse(res, 'User is not a vendor', 400);
+    if (!user) return errorResponse(res, "User not found", 404);
+    if (user.role !== "vendor") return errorResponse(res, "User is not a vendor", 400);
 
     if (approved) {
       user.verified = true;
-      user.status = 'active';
+      user.status = "active";
     } else {
       user.verified = false;
-      user.status = 'suspended';
+      user.status = "suspended";
     }
 
+    // optionally store notes if you have a field; otherwise ignore
     await user.save();
 
-    successResponse(res, {
-      message: `Vendor ${approved ? 'approved' : 'rejected'} successfully`,
-      data: { user }
+    return successResponse(res, {
+      message: `Vendor ${approved ? "approved" : "rejected"} successfully`,
+      data: { user },
     });
   } catch (error) {
-    console.error('Approve vendor error:', error);
-    errorResponse(res, error.message || 'Failed to approve vendor', 500);
+    console.error("Approve vendor error:", error);
+    return errorResponse(res, error.message || "Failed to approve vendor", 500);
   }
 };
 
@@ -178,20 +179,20 @@ exports.verifyStudent = async (req, res) => {
     const { verified } = req.body;
 
     const user = await User.findById(userId);
-    if (!user) return errorResponse(res, 'User not found', 404);
-    if (user.role !== 'student') return errorResponse(res, 'User is not a student', 400);
+    if (!user) return errorResponse(res, "User not found", 404);
+    if (user.role !== "student") return errorResponse(res, "User is not a student", 400);
 
-    user.verified = verified;
-    user.status = verified ? 'active' : 'pending';
+    user.verified = !!verified;
+    user.status = verified ? "active" : "pending";
     await user.save();
 
-    successResponse(res, {
-      message: `Student ${verified ? 'verified' : 'unverified'} successfully`,
-      data: { user }
+    return successResponse(res, {
+      message: `Student ${verified ? "verified" : "unverified"} successfully`,
+      data: { user },
     });
   } catch (error) {
-    console.error('Verify student error:', error);
-    errorResponse(res, error.message || 'Failed to verify student', 500);
+    console.error("Verify student error:", error);
+    return errorResponse(res, error.message || "Failed to verify student", 500);
   }
 };
 
@@ -199,83 +200,66 @@ exports.verifyStudent = async (req, res) => {
 
 exports.getAllStores = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 20;
     const skip = (page - 1) * limit;
     const { status, isApproved, search } = req.query;
 
-    let query = {};
-
+    const query = {};
     if (status) query.status = status;
 
-    if (isApproved !== undefined && isApproved !== '') {
-      query.isApproved = isApproved === 'true';
+    if (isApproved !== undefined && isApproved !== "") {
+      query.isApproved = isApproved === "true";
     }
 
     if (search) {
       query.$or = [
-        { storeName: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
+        { storeName: { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } },
       ];
     }
 
     const stores = await Store.find(query)
-      .populate('owner', 'fullname email phone businessName')
-      .populate('approvedBy', 'fullname')
+      .populate("owner", "fullname email phone businessName")
+      .populate("approvedBy", "fullname")
       .sort({ createdAt: -1 })
       .limit(limit)
       .skip(skip);
 
     const total = await Store.countDocuments(query);
 
-    const pendingCount = await Store.countDocuments({ isApproved: false, status: 'pending' });
-    const activeCount = await Store.countDocuments({ isApproved: true, status: 'active' });
-    const suspendedCount = await Store.countDocuments({ status: 'suspended' });
+    const pendingCount = await Store.countDocuments({ isApproved: false, status: "pending" });
+    const activeCount = await Store.countDocuments({ isApproved: true, status: "active" });
+    const suspendedCount = await Store.countDocuments({ status: "suspended" });
     const totalCount = await Store.countDocuments();
 
-    successResponse(res, {
-      message: 'Stores retrieved successfully',
+    return successResponse(res, {
+      message: "Stores retrieved successfully",
       data: {
         stores,
-        pagination: {
-          page,
-          limit,
-          total,
-          pages: Math.ceil(total / limit)
-        },
-        counts: {
-          pending: pendingCount,
-          active: activeCount,
-          suspended: suspendedCount,
-          total: totalCount
-        }
-      }
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+        counts: { pending: pendingCount, active: activeCount, suspended: suspendedCount, total: totalCount },
+      },
     });
   } catch (error) {
-    console.error('Get stores error:', error);
-    errorResponse(res, error.message || 'Failed to get stores', 500);
+    console.error("Get stores error:", error);
+    return errorResponse(res, error.message || "Failed to get stores", 500);
   }
 };
 
 exports.getPendingStores = async (req, res) => {
   try {
-    const stores = await Store.find({
-      isApproved: false,
-      status: 'pending'
-    })
-      .populate('owner', 'fullname email phone businessName')
+    const stores = await Store.find({ isApproved: false, status: "pending" })
+      .populate("owner", "fullname email phone businessName")
       .sort({ createdAt: -1 });
 
-    successResponse(res, {
-      message: 'Pending stores retrieved successfully',
-      data: {
-        stores,
-        count: stores.length
-      }
+    return successResponse(res, {
+      message: "Pending stores retrieved successfully",
+      data: { stores, count: stores.length },
     });
   } catch (error) {
-    console.error('Get pending stores error:', error);
-    errorResponse(res, error.message || 'Failed to get pending stores', 500);
+    console.error("Get pending stores error:", error);
+    return errorResponse(res, error.message || "Failed to get pending stores", 500);
   }
 };
 
@@ -284,20 +268,15 @@ exports.getStoreDetails = async (req, res) => {
     const { storeId } = req.params;
 
     const store = await Store.findById(storeId)
-      .populate('owner', 'fullname email phone businessName department faculty')
-      .populate('approvedBy', 'fullname');
+      .populate("owner", "fullname email phone businessName department faculty")
+      .populate("approvedBy", "fullname");
 
-    if (!store) {
-      return errorResponse(res, 'Store not found', 404);
-    }
+    if (!store) return errorResponse(res, "Store not found", 404);
 
-    successResponse(res, {
-      message: 'Store retrieved successfully',
-      data: { store }
-    });
+    return successResponse(res, { message: "Store retrieved successfully", data: { store } });
   } catch (error) {
-    console.error('Get store details error:', error);
-    errorResponse(res, error.message || 'Failed to get store', 500);
+    console.error("Get store details error:", error);
+    return errorResponse(res, error.message || "Failed to get store", 500);
   }
 };
 
@@ -307,27 +286,27 @@ exports.approveStore = async (req, res) => {
     const { approved, notes } = req.body;
 
     const store = await Store.findById(storeId);
-    if (!store) return errorResponse(res, 'Store not found', 404);
+    if (!store) return errorResponse(res, "Store not found", 404);
 
     if (approved) {
       store.isApproved = true;
-      store.status = 'active';
-      store.approvedBy = req.user.id;
+      store.status = "active";
+      store.approvedBy = req.user._id;
       store.approvedAt = new Date();
     } else {
       store.isApproved = false;
-      store.status = 'suspended';
+      store.status = "suspended";
     }
 
     await store.save();
 
-    successResponse(res, {
-      message: `Store ${approved ? 'approved' : 'rejected'} successfully`,
-      data: { store }
+    return successResponse(res, {
+      message: `Store ${approved ? "approved" : "rejected"} successfully`,
+      data: { store },
     });
   } catch (error) {
-    console.error('Approve store error:', error);
-    errorResponse(res, error.message || 'Failed to update store', 500);
+    console.error("Approve store error:", error);
+    return errorResponse(res, error.message || "Failed to update store", 500);
   }
 };
 
@@ -336,354 +315,27 @@ exports.updateStoreStatus = async (req, res) => {
     const { storeId } = req.params;
     const { status } = req.body;
 
-    if (!['active', 'suspended', 'pending'].includes(status)) {
-      return errorResponse(res, 'Invalid status value', 400);
+    if (!["active", "suspended", "pending"].includes(status)) {
+      return errorResponse(res, "Invalid status value", 400);
     }
 
     const store = await Store.findById(storeId);
-    if (!store) return errorResponse(res, 'Store not found', 404);
+    if (!store) return errorResponse(res, "Store not found", 404);
 
     store.status = status;
 
-    if (status === 'active' && !store.isApproved) {
+    if (status === "active" && !store.isApproved) {
       store.isApproved = true;
-      store.approvedBy = req.user.id;
+      store.approvedBy = req.user._id;
       store.approvedAt = new Date();
     }
 
     await store.save();
 
-    successResponse(res, {
-      message: `Store status updated to ${status}`,
-      data: { store }
-    });
+    return successResponse(res, { message: `Store status updated to ${status}`, data: { store } });
   } catch (error) {
-    console.error('Update store status error:', error);
-    errorResponse(res, error.message || 'Failed to update store status', 500);
-  }
-};
-
-// ==================== STUDENT REGISTRY ====================
-
-exports.getStudentRegistry = async (req, res) => {
-  try {
-    const {
-      page = 1, limit = 20, search = '', faculty = '',
-      department = '', level = '', status = ''
-    } = req.query;
-
-    const query = {};
-    if (search) {
-      query.$or = [
-        { matricNumber: { $regex: search, $options: 'i' } },
-        { fullname: { $regex: search, $options: 'i' } }
-      ];
-    }
-    if (faculty) query.faculty = faculty;
-    if (department) query.department = department;
-    if (level) query.level = parseInt(level);
-    if (status) query.status = status;
-
-    const students = await StudentRegistry.find(query)
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
-      .skip((parseInt(page) - 1) * parseInt(limit));
-
-    const total = await StudentRegistry.countDocuments(query);
-
-    successResponse(res, {
-      message: 'Student registry retrieved successfully',
-      data: {
-        students,
-        pagination: {
-          total,
-          page: parseInt(page),
-          pages: Math.ceil(total / parseInt(limit)),
-          limit: parseInt(limit)
-        }
-      }
-    });
-  } catch (error) {
-    console.error('Get student registry error:', error);
-    errorResponse(res, error.message || 'Failed to get registry', 500);
-  }
-};
-
-exports.addStudentToRegistry = async (req, res) => {
-  try {
-    const { matricNumber, fullname, department, faculty, level, sessionYear, email, phone } = req.body;
-
-    if (!matricNumber || !fullname || !department || !faculty || !level) {
-      return errorResponse(res, 'Matric, name, department, faculty & level are required', 400);
-    }
-
-    const normalizedMatric = matricNumber.toUpperCase().trim();
-
-    const existing = await StudentRegistry.findOne({ matricNumber: normalizedMatric });
-    if (existing) return errorResponse(res, 'Matric number already exists in registry', 400);
-
-    const currentYear = new Date().getFullYear();
-    const defaultSessionYear = `${currentYear}/${currentYear + 1}`;
-
-    const student = await StudentRegistry.create({
-      matricNumber: normalizedMatric,
-      fullname: fullname.trim(),
-      department: department.trim(),
-      faculty: faculty.trim(),
-      level: parseInt(level),
-      sessionYear: sessionYear || defaultSessionYear,
-      email: email ? email.toLowerCase().trim() : undefined,
-      phone: phone ? phone.trim() : undefined,
-      addedBy: req.user.id,
-      status: 'active'
-    });
-
-    successResponse(res, {
-      message: 'Student added to registry successfully',
-      data: { student }
-    }, 201);
-  } catch (error) {
-    console.error('Add student error:', error);
-    errorResponse(res, error.message || 'Failed to add student', 500);
-  }
-};
-
-// ✅ FIXED - Bulk upload with flexible CSV parsing (handles various header formats)
-exports.bulkAddStudents = async (req, res) => {
-  try {
-    if (!req.file) return errorResponse(res, 'Please upload a CSV file', 400);
-
-    console.log('\n🚀 BULK UPLOAD STARTED');
-    console.log('File:', req.file.originalname, 'Size:', req.file.size);
-
-    const students = [];
-    const errors = [];
-    let rowNumber = 0;
-    const userId = req.user?.id;
-
-    if (!userId) {
-      return errorResponse(res, 'User authentication failed', 401);
-    }
-
-    const currentYear = new Date().getFullYear();
-    const defaultSessionYear = `${currentYear}/${currentYear + 1}`;
-
-    fs.createReadStream(req.file.path)
-      .pipe(csv({
-        // Transform headers: "Matric Number" → "matricnumber", "fullName" → "fullname"
-        mapHeaders: ({ header }) => header.trim().toLowerCase().replace(/\s+/g, '')
-      }))
-      .on('data', (row) => {
-        rowNumber++;
-
-        if (rowNumber === 1) {
-          console.log('📋 First row keys:', Object.keys(row));
-          console.log('📋 First row values:', row);
-        }
-
-        // All keys are now lowercase without spaces
-        const matricNumber = (row.matricnumber || row.matric || '').toString().trim();
-        const fullname = (row.fullname || row.name || '').toString().trim();
-        const department = (row.department || row.dept || '').toString().trim();
-        const faculty = (row.faculty || 'N/A').toString().trim();
-        const level = (row.level || '100').toString().trim();
-        const sessionYear = (row.sessionyear || defaultSessionYear).toString().trim();
-        const email = (row.email || '').toString().trim();
-        const phone = (row.phone || '').toString().trim();
-
-        if (rowNumber === 1) {
-          console.log('📋 Parsed:', { matricNumber, fullname, department, faculty, level });
-        }
-
-        if (!matricNumber || !fullname || !department) {
-          errors.push({
-            row: rowNumber,
-            error: 'Missing required fields',
-            got: { matricNumber, fullname, department }
-          });
-          return;
-        }
-
-        students.push({
-          matricNumber: matricNumber.toUpperCase(),
-          fullname,
-          department,
-          faculty,
-          level: parseInt(level) || 100,
-          sessionYear,
-          email: email ? email.toLowerCase() : undefined,
-          phone: phone || undefined,
-          addedBy: userId,
-          status: 'active'
-        });
-      })
-      .on('end', async () => {
-        try {
-          console.log(`\n✅ Parsed: ${students.length} valid, ${errors.length} errors`);
-
-          if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-
-          let inserted = 0, duplicates = 0;
-
-          for (const student of students) {
-            try {
-              await StudentRegistry.create(student);
-              inserted++;
-            } catch (err) {
-              if (err.code === 11000) {
-                duplicates++;
-              } else {
-                errors.push({ matricNumber: student.matricNumber, error: err.message });
-              }
-            }
-          }
-
-          console.log(`✅ RESULT: Inserted=${inserted}, Duplicates=${duplicates}, Errors=${errors.length}\n`);
-
-          successResponse(res, {
-            message: 'Bulk upload completed',
-            data: {
-              totalRows: rowNumber,
-              inserted,
-              imported: inserted,
-              duplicates,
-              failed: errors.length,
-              errorCount: errors.length,
-              errors: errors.slice(0, 10)
-            }
-          });
-        } catch (err) {
-          console.error('❌ End handler error:', err);
-          errorResponse(res, err.message, 500);
-        }
-      })
-      .on('error', (err) => {
-        console.error('❌ CSV stream error:', err);
-        errorResponse(res, `CSV parsing error: ${err.message}`, 500);
-      });
-  } catch (error) {
-    console.error('❌ Bulk upload error:', error);
-    errorResponse(res, error.message, 500);
-  }
-};
-
-// ✅ NEW - Download CSV template
-exports.downloadTemplate = async (req, res) => {
-  try {
-    const csvContent = `matricNumber,fullname,department,faculty,level,sessionYear,email,phone
-CSC/2020/001,John Doe,Computer Science,Science,300,2024/2025,john@example.com,08012345678
-CSC/2020/002,Jane Smith,Computer Science,Science,300,2024/2025,jane@example.com,08087654321
-EEE/2019/045,Bob Johnson,Electrical Engineering,Engineering,400,2024/2025,bob@example.com,08055554444`;
-
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="student-registry-template.csv"');
-    res.send(csvContent);
-  } catch (error) {
-    console.error('Template download error:', error);
-    res.status(500).json({ success: false, message: 'Failed to download template' });
-  }
-};
-
-exports.getStudentRecord = async (req, res) => {
-  try {
-    const student = await StudentRegistry.findById(req.params.id)
-      .populate('addedBy', 'fullname email');
-    if (!student) return errorResponse(res, 'Student record not found', 404);
-    successResponse(res, { message: 'Student retrieved', data: { student } });
-  } catch (error) {
-    console.error('Get student record error:', error);
-    errorResponse(res, error.message, 500);
-  }
-};
-
-exports.updateStudentRecord = async (req, res) => {
-  try {
-    const { fullname, department, faculty, level, sessionYear, email, phone, status } = req.body;
-    const student = await StudentRegistry.findById(req.params.id);
-    if (!student) return errorResponse(res, 'Student record not found', 404);
-
-    if (fullname) student.fullname = fullname.trim();
-    if (department) student.department = department.trim();
-    if (faculty) student.faculty = faculty.trim();
-    if (level) student.level = parseInt(level);
-    if (sessionYear) student.sessionYear = sessionYear;
-    if (email) student.email = email.toLowerCase().trim();
-    if (phone) student.phone = phone.trim();
-    if (status) student.status = status;
-
-    await student.save();
-    successResponse(res, { message: 'Student updated successfully', data: { student } });
-  } catch (error) {
-    console.error('Update student error:', error);
-    errorResponse(res, error.message, 500);
-  }
-};
-
-exports.deleteStudentRecord = async (req, res) => {
-  try {
-    const student = await StudentRegistry.findById(req.params.id);
-    if (!student) return errorResponse(res, 'Student record not found', 404);
-    if (student.isRegistered) return errorResponse(res, 'Cannot delete already registered student', 400);
-    await student.deleteOne();
-    successResponse(res, { message: 'Student deleted successfully' });
-  } catch (error) {
-    console.error('Delete student error:', error);
-    errorResponse(res, error.message, 500);
-  }
-};
-
-exports.getRegistryStats = async (req, res) => {
-  try {
-    const totalStudents = await StudentRegistry.countDocuments();
-    const activeStudents = await StudentRegistry.countDocuments({ status: 'active' });
-    const graduatedStudents = await StudentRegistry.countDocuments({ status: 'graduated' });
-    const suspendedStudents = await StudentRegistry.countDocuments({ status: 'suspended' });
-    const registeredStudents = await StudentRegistry.countDocuments({ isRegistered: true });
-    const pendingRegistration = totalStudents - registeredStudents;
-
-    const registrationRate = totalStudents > 0
-      ? `${((registeredStudents / totalStudents) * 100).toFixed(1)}%`
-      : '0%';
-
-    const byFaculty = await StudentRegistry.aggregate([
-      { $group: { _id: '$faculty', count: { $sum: 1 } } },
-      { $sort: { count: -1 } }
-    ]);
-
-    const byLevel = await StudentRegistry.aggregate([
-      { $group: { _id: '$level', count: { $sum: 1 } } },
-      { $sort: { _id: 1 } }
-    ]);
-
-    const byDepartment = await StudentRegistry.aggregate([
-      { $group: { _id: '$department', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 10 }
-    ]);
-
-    successResponse(res, {
-      message: 'Statistics retrieved',
-      data: {
-        totalStudents,
-        activeStudents,
-        graduatedStudents,
-        suspendedStudents,
-        registeredUsers: registeredStudents,
-        pendingRegistration,
-        registrationRate,
-        byStatus: {
-          active: activeStudents,
-          graduated: graduatedStudents,
-          suspended: suspendedStudents
-        },
-        byFaculty,
-        byLevel,
-        byDepartment
-      }
-    });
-  } catch (error) {
-    console.error('Get registry stats error:', error);
-    errorResponse(res, error.message, 500);
+    console.error("Update store status error:", error);
+    return errorResponse(res, error.message || "Failed to update store status", 500);
   }
 };
 
@@ -692,8 +344,10 @@ exports.getRegistryStats = async (req, res) => {
 exports.getCommissionEarnings = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
+    const sugId = req.user._id;
+
     const earnings = await commissionService.getSugEarnings(
-      req.user.id,
+      sugId,
       startDate ? new Date(startDate) : null,
       endDate ? new Date(endDate) : null
     );
@@ -701,64 +355,63 @@ exports.getCommissionEarnings = async (req, res) => {
     const breakdown = await SugCommission.aggregate([
       {
         $match: {
-          sugId: req.user._id,
-          ...(startDate && endDate ? {
-            createdAt: { $gte: new Date(startDate), $lte: new Date(endDate) }
-          } : {})
-        }
+          sugId,
+          ...(startDate && endDate
+            ? { createdAt: { $gte: new Date(startDate), $lte: new Date(endDate) } }
+            : {}),
+        },
       },
       {
         $group: {
-          _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
-          totalAmount: { $sum: '$amount' },
-          count: { $sum: 1 }
-        }
+          _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" } },
+          totalAmount: { $sum: "$amount" },
+          count: { $sum: 1 },
+        },
       },
-      { $sort: { '_id.year': -1, '_id.month': -1 } }
+      { $sort: { "_id.year": -1, "_id.month": -1 } },
     ]);
 
-    successResponse(res, {
-      message: 'Commission earnings retrieved successfully',
-      data: { summary: earnings, breakdown }
+    return successResponse(res, {
+      message: "Commission earnings retrieved successfully",
+      data: { summary: earnings, breakdown },
     });
   } catch (error) {
-    console.error('Get commission earnings error:', error);
-    errorResponse(res, error.message || 'Failed to get earnings', 500);
+    console.error("Get commission earnings error:", error);
+    return errorResponse(res, error.message || "Failed to get earnings", 500);
   }
 };
 
 exports.getTransactionReports = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 20;
     const skip = (page - 1) * limit;
     const { startDate, endDate } = req.query;
 
-    let query = { sugId: req.user.id };
+    const sugId = req.user._id;
+
+    const query = { sugId };
     if (startDate && endDate) {
       query.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
     }
 
     const transactions = await SugCommission.find(query)
-      .populate('orderId', 'orderNumber totalAmount')
+      .populate("orderId", "orderNumber totalAmount")
       .sort({ createdAt: -1 })
       .limit(limit)
       .skip(skip);
 
     const total = await SugCommission.countDocuments(query);
 
-    successResponse(res, {
-      message: 'Transaction reports retrieved successfully',
+    return successResponse(res, {
+      message: "Transaction reports retrieved successfully",
       data: {
         transactions,
-        pagination: {
-          page, limit, total,
-          pages: Math.ceil(total / limit)
-        }
-      }
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      },
     });
   } catch (error) {
-    console.error('Get transaction reports error:', error);
-    errorResponse(res, error.message || 'Failed to get reports', 500);
+    console.error("Get transaction reports error:", error);
+    return errorResponse(res, error.message || "Failed to get reports", 500);
   }
 };

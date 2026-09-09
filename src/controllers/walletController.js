@@ -116,7 +116,7 @@ exports.requestWithdrawal = async (req, res) => {
 
     // Validate amount
     if (!amount || amount < 1000) {
-      return errorResponse(res, 'Minimum withdrawal amount is ₦1,000', 400);
+      return errorResponse(res, 'Minimum withdrawal amount is ₦1000', 400);
     }
 
     // Get wallet balance

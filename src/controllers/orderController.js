@@ -1,9 +1,10 @@
 // src/controllers/orderController.js
 
-const orderService = require('../services/orderService');
-const Cart = require('../models/Cart');
-const Order = require('../models/Order');
-const { successResponse, errorResponse } = require('../utils/responses');
+const orderService = require("../services/orderService");
+const commissionService = require("../services/commissionService"); // ✅ add this
+const Cart = require("../models/Cart");
+const Order = require("../models/Order");
+const { successResponse, errorResponse } = require("../utils/responses");
 
 // @desc    Create order from cart
 // @route   POST /api/orders
@@ -12,26 +13,21 @@ exports.createOrder = async (req, res) => {
   try {
     const { shippingAddress, notes } = req.body;
 
-    // ✅ Check if cart has items BEFORE creating order
     const cart = await Cart.findOne({ userId: req.user.id });
     if (!cart || !cart.items || cart.items.length === 0) {
-      return errorResponse(res, 'Your cart is empty. Add items before checking out.', 400);
+      return errorResponse(res, "Your cart is empty. Add items before checking out.", 400);
     }
 
-    const order = await orderService.createOrderFromCart(
-      req.user.id,
-      shippingAddress,
-      notes
+    const order = await orderService.createOrderFromCart(req.user.id, shippingAddress, notes);
+
+    return successResponse(
+      res,
+      { message: "Order created successfully", data: { order } },
+      201
     );
-
-    successResponse(res, {
-      message: 'Order created successfully',
-      data: { order }
-    }, 201);
-
   } catch (error) {
-    console.error('Create order error:', error);
-    errorResponse(res, error.message || 'Failed to create order', 500);
+    console.error("Create order error:", error);
+    return errorResponse(res, error.message || "Failed to create order", 500);
   }
 };
 
@@ -40,42 +36,33 @@ exports.createOrder = async (req, res) => {
 // @access  Private (Student)
 exports.getMyOrders = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
     const skip = (page - 1) * limit;
     const { status } = req.query;
 
-    let query = { buyerId: req.user.id };
-
-    if (status) {
-      query.orderStatus = status;
-    }
+    const query = { buyerId: req.user.id };
+    if (status) query.orderStatus = status;
 
     const orders = await Order.find(query)
-      .populate('items.productId', 'name images')
-      .populate('items.storeId', 'storeName')
+      .populate("items.productId", "name images")
+      .populate("items.storeId", "storeName")
       .sort({ createdAt: -1 })
       .limit(limit)
       .skip(skip);
 
     const total = await Order.countDocuments(query);
 
-    successResponse(res, {
-      message: 'Orders retrieved successfully',
+    return successResponse(res, {
+      message: "Orders retrieved successfully",
       data: {
         orders,
-        pagination: {
-          page,
-          limit,
-          total,
-          pages: Math.ceil(total / limit)
-        }
-      }
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      },
     });
-
   } catch (error) {
-    console.error('Get orders error:', error);
-    errorResponse(res, error.message || 'Failed to get orders', 500);
+    console.error("Get orders error:", error);
+    return errorResponse(res, error.message || "Failed to get orders", 500);
   }
 };
 
@@ -85,29 +72,19 @@ exports.getMyOrders = async (req, res) => {
 exports.getOrder = async (req, res) => {
   try {
     const order = await orderService.getOrderDetails(req.params.id);
+    if (!order) return errorResponse(res, "Order not found", 404);
 
-    if (!order) {
-      return errorResponse(res, 'Order not found', 404);
-    }
-
-    // Check authorization
     const isAuthorized =
       order.buyerId._id.toString() === req.user.id ||
-      order.items.some(item => item.vendorId._id.toString() === req.user.id) ||
-      ['admin', 'sug'].includes(req.user.role);
+      order.items.some((item) => item.vendorId._id.toString() === req.user.id) ||
+      ["admin", "sug"].includes(req.user.role);
 
-    if (!isAuthorized) {
-      return errorResponse(res, 'Not authorized to view this order', 403);
-    }
+    if (!isAuthorized) return errorResponse(res, "Not authorized to view this order", 403);
 
-    successResponse(res, {
-      message: 'Order retrieved successfully',
-      data: { order }
-    });
-
+    return successResponse(res, { message: "Order retrieved successfully", data: { order } });
   } catch (error) {
-    console.error('Get order error:', error);
-    errorResponse(res, error.message || 'Failed to get order', 500);
+    console.error("Get order error:", error);
+    return errorResponse(res, error.message || "Failed to get order", 500);
   }
 };
 
@@ -117,53 +94,42 @@ exports.getOrder = async (req, res) => {
 exports.getOrderDetails = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id)
-      .populate('buyerId', 'fullname email phone matricNumber department faculty')
-      .populate('items.productId', 'name images description')
-      .populate('items.vendorId', 'fullname email phone businessName')
-      .populate('items.storeId', 'storeName logo category')
-      .populate('statusHistory.updatedBy', 'fullname role');
+      .populate("buyerId", "fullname email phone matricNumber department faculty")
+      .populate("items.productId", "name images description")
+      .populate("items.vendorId", "fullname email phone businessName")
+      .populate("items.storeId", "storeName logo category")
+      .populate("statusHistory.updatedBy", "fullname role");
 
-    if (!order) {
-      return errorResponse(res, 'Order not found', 404);
-    }
+    if (!order) return errorResponse(res, "Order not found", 404);
 
-    // Authorization check
     const isBuyer = order.buyerId._id.toString() === req.user.id;
-    const isVendor = order.items.some(
-      item => item.vendorId._id.toString() === req.user.id
-    );
-    const isAdminOrSug = ['admin', 'sug'].includes(req.user.role);
+    const isVendor = order.items.some((item) => item.vendorId._id.toString() === req.user.id);
+    const isAdminOrSug = ["admin", "sug"].includes(req.user.role);
 
     if (!isBuyer && !isVendor && !isAdminOrSug) {
-      return errorResponse(res, 'Not authorized to view this order', 403);
+      return errorResponse(res, "Not authorized to view this order", 403);
     }
 
-    // ✅ For vendors, only show their own items
-    let filteredOrder = order.toObject();
-    let viewerRole = 'admin';
+    const filteredOrder = order.toObject();
+    let viewerRole = "admin";
 
     if (isBuyer) {
-      viewerRole = 'buyer';
+      viewerRole = "buyer";
     } else if (isVendor && !isAdminOrSug) {
-      viewerRole = 'vendor';
+      viewerRole = "vendor";
       filteredOrder.items = filteredOrder.items.filter(
-        item => item.vendorId._id.toString() === req.user.id
+        (item) => item.vendorId._id.toString() === req.user.id
       );
-      // Recalculate subtotal for vendor's items only
-      filteredOrder.vendorSubtotal = filteredOrder.items.reduce(
-        (sum, item) => sum + item.subtotal,
-        0
-      );
+      filteredOrder.vendorSubtotal = filteredOrder.items.reduce((sum, item) => sum + item.subtotal, 0);
     }
 
-    successResponse(res, {
-      message: 'Order details retrieved successfully',
-      data: { order: filteredOrder, viewerRole }
+    return successResponse(res, {
+      message: "Order details retrieved successfully",
+      data: { order: filteredOrder, viewerRole },
     });
-
   } catch (error) {
-    console.error('Get order details error:', error);
-    errorResponse(res, error.message || 'Failed to get order details', 500);
+    console.error("Get order details error:", error);
+    return errorResponse(res, error.message || "Failed to get order details", 500);
   }
 };
 
@@ -172,32 +138,22 @@ exports.getOrderDetails = async (req, res) => {
 // @access  Private (Vendor)
 exports.getVendorOrders = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
     const { status } = req.query;
 
-    const result = await orderService.getVendorOrders(req.user.id, {
-      status,
-      page,
-      limit
-    });
+    const result = await orderService.getVendorOrders(req.user.id, { status, page, limit });
 
-    successResponse(res, {
-      message: 'Vendor orders retrieved successfully',
+    return successResponse(res, {
+      message: "Vendor orders retrieved successfully",
       data: {
         orders: result.orders,
-        pagination: {
-          page,
-          limit,
-          total: result.total,
-          pages: result.pages
-        }
-      }
+        pagination: { page, limit, total: result.total, pages: result.pages },
+      },
     });
-
   } catch (error) {
-    console.error('Get vendor orders error:', error);
-    errorResponse(res, error.message || 'Failed to get vendor orders', 500);
+    console.error("Get vendor orders error:", error);
+    return errorResponse(res, error.message || "Failed to get vendor orders", 500);
   }
 };
 
@@ -208,44 +164,42 @@ exports.updateOrderStatus = async (req, res) => {
   try {
     const { status, note } = req.body;
 
-    // ✅ Vendors can only move up to "shipped" - NOT delivered
-    // Only buyer can mark as delivered (protection against scams)
-    const vendorAllowedStatuses = ['processing', 'shipped'];
-    const adminAllowedStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
+    const vendorAllowedStatuses = ["processing", "shipped"];
+    const adminAllowedStatuses = ["pending", "processing", "shipped", "delivered", "cancelled"];
 
-    const allowedStatuses = req.user.role === 'admin'
-      ? adminAllowedStatuses
-      : vendorAllowedStatuses;
+    const allowedStatuses = req.user.role === "admin" ? adminAllowedStatuses : vendorAllowedStatuses;
 
     if (!allowedStatuses.includes(status)) {
-      const message = req.user.role === 'vendor'
-        ? `Invalid status. Vendors can only mark orders as 'processing' or 'shipped'. Only the buyer can confirm delivery.`
-        : 'Invalid order status';
-
+      const message =
+        req.user.role === "vendor"
+          ? "Invalid status. Vendors can only mark orders as 'processing' or 'shipped'. Only the buyer can confirm delivery."
+          : "Invalid order status";
       return errorResponse(res, message, 400);
     }
 
-    const order = await orderService.updateOrderStatus(
-      req.params.id,
-      status,
-      req.user.id,
-      note
-    );
+    const order = await orderService.updateOrderStatus(req.params.id, status, req.user.id, note);
 
-    // Add timestamp for shipped orders
-    if (status === 'shipped') {
+    if (status === "shipped") {
       order.shippedAt = new Date();
       await order.save();
     }
 
-    successResponse(res, {
-      message: `Order marked as ${status} successfully`,
-      data: { order }
-    });
+    // ✅ If admin sets delivered, release funds too (safe: releaseVendorPayment is idempotent)
+    if (status === "delivered") {
+      try {
+        await commissionService.releaseVendorPayment(order._id);
+      } catch (payoutError) {
+        console.error("Payout release error:", payoutError);
+      }
+    }
 
+    return successResponse(res, {
+      message: `Order marked as ${status} successfully`,
+      data: { order },
+    });
   } catch (error) {
-    console.error('Update order status error:', error);
-    errorResponse(res, error.message || 'Failed to update order status', 500);
+    console.error("Update order status error:", error);
+    return errorResponse(res, error.message || "Failed to update order status", 500);
   }
 };
 
@@ -257,17 +211,13 @@ exports.confirmDelivery = async (req, res) => {
     const { note } = req.body;
     const order = await Order.findById(req.params.id);
 
-    if (!order) {
-      return errorResponse(res, 'Order not found', 404);
-    }
+    if (!order) return errorResponse(res, "Order not found", 404);
 
-    // ✅ Only the buyer can confirm delivery
     if (order.buyerId.toString() !== req.user.id) {
-      return errorResponse(res, 'Only the buyer can confirm delivery', 403);
+      return errorResponse(res, "Only the buyer can confirm delivery", 403);
     }
 
-    // ✅ Order must be shipped first
-    if (order.orderStatus !== 'shipped') {
+    if (order.orderStatus !== "shipped") {
       return errorResponse(
         res,
         `Cannot confirm delivery. Order status is currently '${order.orderStatus}'. It must be 'shipped' first.`,
@@ -275,39 +225,36 @@ exports.confirmDelivery = async (req, res) => {
       );
     }
 
-    // ✅ Payment must be paid
-    if (order.paymentStatus !== 'paid') {
-      return errorResponse(res, 'Cannot confirm delivery for unpaid order', 400);
+    if (order.paymentStatus !== "paid") {
+      return errorResponse(res, "Cannot confirm delivery for unpaid order", 400);
     }
 
-    // Update to delivered
-    order.orderStatus = 'delivered';
+    order.orderStatus = "delivered";
     order.deliveredAt = new Date();
     order.statusHistory.push({
-      status: 'delivered',
+      status: "delivered",
       updatedBy: req.user.id,
-      note: note || 'Delivery confirmed by buyer',
-      timestamp: new Date()
+      note: note || "Delivery confirmed by buyer",
+      timestamp: new Date(),
     });
 
     await order.save();
 
-    // TODO: Trigger vendor payout / release funds
-    // Uncomment when commissionService.releaseVendorPayment is implemented
-    // try {
-    //   await commissionService.releaseVendorPayment(order._id);
-    // } catch (payoutError) {
-    //   console.error('Payout release error:', payoutError);
-    // }
+    // ✅ Release vendor payment + confirm SUG/platform earnings
+    try {
+      await commissionService.releaseVendorPayment(order._id);
+    } catch (payoutError) {
+      console.error("Payout release error:", payoutError);
+      // You can choose to return error here, but better to not block delivery confirmation UX
+    }
 
-    successResponse(res, {
-      message: 'Delivery confirmed successfully. Thank you for shopping with us!',
-      data: { order }
+    return successResponse(res, {
+      message: "Delivery confirmed successfully. Thank you for shopping with us!",
+      data: { order },
     });
-
   } catch (error) {
-    console.error('Confirm delivery error:', error);
-    errorResponse(res, error.message || 'Failed to confirm delivery', 500);
+    console.error("Confirm delivery error:", error);
+    return errorResponse(res, error.message || "Failed to confirm delivery", 500);
   }
 };
 
@@ -318,20 +265,12 @@ exports.cancelOrder = async (req, res) => {
   try {
     const { reason } = req.body;
 
-    const order = await orderService.cancelOrder(
-      req.params.id,
-      req.user.id,
-      reason || 'Cancelled by user'
-    );
+    const order = await orderService.cancelOrder(req.params.id, req.user.id, reason || "Cancelled by user");
 
-    successResponse(res, {
-      message: 'Order cancelled successfully',
-      data: { order }
-    });
-
+    return successResponse(res, { message: "Order cancelled successfully", data: { order } });
   } catch (error) {
-    console.error('Cancel order error:', error);
-    errorResponse(res, error.message || 'Failed to cancel order', 500);
+    console.error("Cancel order error:", error);
+    return errorResponse(res, error.message || "Failed to cancel order", 500);
   }
 };
 
@@ -341,18 +280,17 @@ exports.cancelOrder = async (req, res) => {
 exports.getOrderStatistics = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const vendorId = req.user.role === 'vendor' ? req.user.id : null;
+    const vendorId = req.user.role === "vendor" ? req.user.id : null;
 
     const stats = await orderService.getOrderStatistics(vendorId, startDate, endDate);
 
-    successResponse(res, {
-      message: 'Order statistics retrieved successfully',
-      data: { statistics: stats }
+    return successResponse(res, {
+      message: "Order statistics retrieved successfully",
+      data: { statistics: stats },
     });
-
   } catch (error) {
-    console.error('Get statistics error:', error);
-    errorResponse(res, error.message || 'Failed to get statistics', 500);
+    console.error("Get statistics error:", error);
+    return errorResponse(res, error.message || "Failed to get statistics", 500);
   }
 };
 
@@ -361,49 +299,36 @@ exports.getOrderStatistics = async (req, res) => {
 // @access  Private (Admin)
 exports.getAllOrders = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 20;
     const skip = (page - 1) * limit;
     const { status, startDate, endDate } = req.query;
 
-    let query = {};
-
-    if (status) {
-      query.orderStatus = status;
-    }
-
+    const query = {};
+    if (status) query.orderStatus = status;
     if (startDate && endDate) {
-      query.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      };
+      query.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
     }
 
     const orders = await Order.find(query)
-      .populate('buyerId', 'fullname email')
-      .populate('items.vendorId', 'fullname')
-      .populate('items.storeId', 'storeName')
+      .populate("buyerId", "fullname email")
+      .populate("items.vendorId", "fullname")
+      .populate("items.storeId", "storeName")
       .sort({ createdAt: -1 })
       .limit(limit)
       .skip(skip);
 
     const total = await Order.countDocuments(query);
 
-    successResponse(res, {
-      message: 'Orders retrieved successfully',
+    return successResponse(res, {
+      message: "Orders retrieved successfully",
       data: {
         orders,
-        pagination: {
-          page,
-          limit,
-          total,
-          pages: Math.ceil(total / limit)
-        }
-      }
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      },
     });
-
   } catch (error) {
-    console.error('Get all orders error:', error);
-    errorResponse(res, error.message || 'Failed to get orders', 500);
+    console.error("Get all orders error:", error);
+    return errorResponse(res, error.message || "Failed to get orders", 500);
   }
 };
