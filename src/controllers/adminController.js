@@ -6,7 +6,7 @@ const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Payment = require('../models/Payment');
 const CommissionSetting = require('../models/CommissionSetting');
-const commissionService = require('../services/CommissionService');
+const commissionService = require('../services/commissionService');
 const { successResponse, errorResponse } = require('../utils/responses');
 
 // @desc    Get admin dashboard statistics
@@ -16,87 +16,73 @@ exports.getDashboardStats = async (req, res) => {
   try {
     // User statistics
     const totalUsers = await User.countDocuments();
-    const totalStudents = await User.countDocuments({ role: 'student' });
-    const totalVendors = await User.countDocuments({ role: 'vendor' });
+    const totalStudents = await User.countDocuments({ role: "student" });
+    const totalVendors = await User.countDocuments({ role: "vendor" });
 
     // Store statistics
     const totalStores = await Store.countDocuments();
-    const activeStores = await Store.countDocuments({ status: 'active', isApproved: true });
-    const pendingStores = await Store.countDocuments({ status: 'pending', isApproved: false });
+    const activeStores = await Store.countDocuments({ status: "active", isApproved: true });
+    const pendingStores = await Store.countDocuments({ status: "pending", isApproved: false });
 
     // Product statistics
     const totalProducts = await Product.countDocuments();
-    const activeProducts = await Product.countDocuments({ status: 'active' });
+    const activeProducts = await Product.countDocuments({ status: "active" });
 
     // Order statistics
     const totalOrders = await Order.countDocuments();
-    const pendingOrders = await Order.countDocuments({ orderStatus: 'pending' });
-    const deliveredOrders = await Order.countDocuments({ orderStatus: 'delivered' });
+    const pendingOrders = await Order.countDocuments({ orderStatus: "pending" });
+    const deliveredOrders = await Order.countDocuments({ orderStatus: "delivered" });
 
-    // Revenue statistics
+    // Gross revenue (successful payments)
     const revenueStats = await Payment.aggregate([
-      { $match: { status: 'success' } },
+      { $match: { status: "success" } },
       {
         $group: {
           _id: null,
-          totalRevenue: { $sum: '$amount' },
-          totalTransactions: { $sum: 1 }
-        }
-      }
+          totalRevenue: { $sum: "$amount" },
+          totalTransactions: { $sum: 1 },
+        },
+      },
     ]);
 
-    const platformRevenue = await commissionService.getPlatformRevenue();
+    // ✅ Admin/Platform revenue (from PlatformRevenue collection)
+    const platformRevenueObj = await commissionService.getPlatformRevenue();
+
+    // ✅ Total SUG commission revenue (from SugCommission collection)
+    const sugRevenueObj = await commissionService.getTotalSugRevenue();
 
     // Recent activities
     const recentOrders = await Order.find()
-      .populate('buyerId', 'fullname email')
+      .populate("buyerId", "fullname email")
       .sort({ createdAt: -1 })
       .limit(5);
 
     const recentUsers = await User.find()
-      .select('fullname email role createdAt')
+      .select("fullname email role createdAt")
       .sort({ createdAt: -1 })
       .limit(5);
 
-    successResponse(res, {
-      message: 'Dashboard stats retrieved successfully',
+    return successResponse(res, {
+      message: "Dashboard stats retrieved successfully",
       data: {
         statistics: {
-          users: {
-            total: totalUsers,
-            students: totalStudents,
-            vendors: totalVendors
-          },
-          stores: {
-            total: totalStores,
-            active: activeStores,
-            pending: pendingStores
-          },
-          products: {
-            total: totalProducts,
-            active: activeProducts
-          },
-          orders: {
-            total: totalOrders,
-            pending: pendingOrders,
-            delivered: deliveredOrders
-          },
+          users: { total: totalUsers, students: totalStudents, vendors: totalVendors },
+          stores: { total: totalStores, active: activeStores, pending: pendingStores },
+          products: { total: totalProducts, active: activeProducts },
+          orders: { total: totalOrders, pending: pendingOrders, delivered: deliveredOrders },
           revenue: {
-            total: revenueStats[0]?.totalRevenue || 0,
+            total: revenueStats[0]?.totalRevenue || 0, // gross revenue
             transactions: revenueStats[0]?.totalTransactions || 0,
-            platformRevenue: platformRevenue.totalRevenue
-          }
+            platformRevenue: platformRevenueObj?.totalRevenue || 0, // admin/platform earnings
+            sugRevenue: sugRevenueObj?.totalRevenue || 0,           // total SUG commission earnings
+          },
         },
-        recentActivities: {
-          orders: recentOrders,
-          users: recentUsers
-        }
-      }
+        recentActivities: { orders: recentOrders, users: recentUsers },
+      },
     });
-
   } catch (error) {
-    console.error('Get admin dashboard error:', error);
-    errorResponse(res, error.message || 'Failed to get dashboard stats', 500);
+    console.error("Get admin dashboard error:", error);
+    return errorResponse(res, error.message || "Failed to get dashboard stats", 500);
   }
 };
 
